@@ -27,4 +27,4 @@ jobs:
           git add .
           git commit -m "deploy: initial clean deployment to Hugging Face"
           git branch -m main
-          git push --force https://quochiepho:$HF_TOKEN@huggingface.co/spaces/quochiepho/doctorAI main
+          git push --force https://quochiepho:$HF_TOKEN@huggingface.co/spaces/quochiepho/trader main
