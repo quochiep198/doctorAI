@@ -296,6 +296,33 @@ async def get_rag():
             # Ensure initialization is completed
             await _rag_instance._ensure_lightrag_initialized()
             
+            # Patch all storage finalize methods to keep connection pool open
+            if os.getenv("POSTGRES_HOST"):
+                logger.info("Patching LightRAG storage finalize methods to maintain persistent PG connection pool")
+                
+                async def dummy_finalize(*args, **kwargs):
+                    pass
+                
+                # Patch LightRAG storages
+                for attr_name in dir(_rag_instance.lightrag):
+                    try:
+                        attr_val = getattr(_rag_instance.lightrag, attr_name, None)
+                        if attr_val and hasattr(attr_val, "finalize") and callable(attr_val.finalize):
+                            logger.info(f"Patching finalize for lightrag.{attr_name}")
+                            attr_val.finalize = dummy_finalize
+                    except Exception as e:
+                        logger.warning(f"Failed to patch finalize for lightrag.{attr_name}: {e}")
+                
+                # Patch RAGAnything caches
+                for cache_name in ["parse_cache", "multimodal_status_cache"]:
+                    try:
+                        cache_val = getattr(_rag_instance, cache_name, None)
+                        if cache_val and hasattr(cache_val, "finalize") and callable(cache_val.finalize):
+                            logger.info(f"Patching finalize for rag.{cache_name}")
+                            cache_val.finalize = dummy_finalize
+                    except Exception as e:
+                        logger.warning(f"Failed to patch finalize for rag.{cache_name}: {e}")
+            
         return _rag_instance
 
 
