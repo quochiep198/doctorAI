@@ -6,3 +6,6 @@ lightrag-hku<1.5
 huggingface_hub
 tqdm
 psycopg2-binary
+openai
+asyncpg
+pgvector
