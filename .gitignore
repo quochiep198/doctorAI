@@ -77,8 +77,8 @@ memory-bank/
 # AI
 .claude/
 .cursor/
+.claude/
+.cursor/
 CLAUDE.md
 
-# GitHub
-.github/
 
