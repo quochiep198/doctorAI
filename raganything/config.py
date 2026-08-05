@@ -6,7 +6,20 @@ Contains configuration dataclasses with environment variable support
 
 from dataclasses import dataclass, field
 from typing import List
-from lightrag.utils import get_env_value
+import os
+from typing import Any
+
+def get_env_value(key: str, default: Any, type_cast: Any = str) -> Any:
+    """Helper function to read environment variable and cast it to a type"""
+    value = os.getenv(key)
+    if value is None:
+        return default
+    try:
+        if type_cast is bool:
+            return str(value).lower() in ("true", "1", "yes", "on")
+        return type_cast(value)
+    except Exception:
+        return default
 
 
 @dataclass

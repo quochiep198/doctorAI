@@ -17,6 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import sys
+# Add the project root directory to sys.path so local modules like 'raganything' can be resolved
+root_dir = Path(__file__).parent.parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.append(str(root_dir))
+
 # RAG-Anything imports
 from raganything import RAGAnything, RAGAnythingConfig
 from lightrag import QueryParam
@@ -84,9 +90,9 @@ def get_llm_funcs():
         api_key = os.getenv("OPENROUTER_API_KEY", api_key)
         base_url = "https://openrouter.ai/api/v1"
         if not llm_model or llm_model.startswith("gpt"):
-            llm_model = "google/gemini-2.5-flash:free"
+            llm_model = "openrouter/free"
         if not vision_model or vision_model.startswith("gpt"):
-            vision_model = "google/gemini-2.5-flash:free"
+            vision_model = "openrouter/free"
             
     # Handle Ollama binding
     elif llm_binding == "ollama":
@@ -172,9 +178,34 @@ def get_llm_funcs():
     if embed_binding == "gemini":
         embed_api_key = os.getenv("GEMINI_API_KEY", embed_api_key)
         embed_base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
-        if not embed_model or embed_model.startswith("text-embedding-3") or embed_model == "text-embedding-3-large":
-            embed_model = "text-embedding-004"
-            embed_dim = 768
+        if not embed_model or embed_model.startswith("text-embedding-3") or embed_model == "text-embedding-3-large" or embed_model == "text-embedding-004":
+            embed_model = "gemini-embedding-001"
+            embed_dim = 3072
+            
+        async def gemini_openai_embed_with_retry(texts: List[str]) -> List[List[float]]:
+            from tenacity import retry, stop_after_attempt, wait_exponential
+            
+            # Decorate the call with a retry strategy for Gemini free tier (15 Requests Per Minute limit)
+            @retry(
+                stop=stop_after_attempt(6),
+                wait=wait_exponential(multiplier=3, min=4, max=30),
+                reraise=True
+            )
+            async def _call_with_retry():
+                return await openai_embed.func(
+                    texts,
+                    model=embed_model,
+                    api_key=embed_api_key,
+                    base_url=embed_base_url
+                )
+            return await _call_with_retry()
+
+        embedding_func = EmbeddingFunc(
+            embedding_dim=embed_dim,
+            max_token_size=8192,
+            func=gemini_openai_embed_with_retry
+        )
+        return llm_model_func, vision_model_func, embedding_func
             
     elif embed_binding == "ollama":
         async def ollama_embedding_async(texts: List[str]) -> List[List[float]]:
@@ -275,7 +306,14 @@ async def get_rag():
             llm_model_func, vision_model_func, embedding_func = get_llm_funcs()
             
             # Check for PostgreSQL storage
-            lightrag_kwargs = {}
+            lightrag_kwargs = {
+                # Increase default timeouts to prevent worker/health check timeout errors during rate limiting retries (especially for Gemini 15 RPM limits)
+                "default_embedding_timeout": 300,
+                "default_llm_timeout": 300,
+                # Increase chunk size to reduce the number of chunks, speeding up indexing and saving API costs
+                "chunk_token_size": 1200,  # Default is 600
+                "chunk_overlap_token_size": 100
+            }
             if os.getenv("POSTGRES_HOST"):
                 logger.info("Initializing LightRAG with PGDocStatusStorage and other PostgreSQL adapters (using default file/memory graph storage)")
                 lightrag_kwargs["kv_storage"] = "PGKVStorage"
@@ -347,20 +385,41 @@ class QueryRequest(BaseModel):
     query: str
     mode: str = "hybrid"
 
+# Document list cache to minimize database latency (especially for Neon DB network roundtrips)
+import time
+_doc_list_cache = None
+_doc_list_cache_time = 0.0
+_doc_cache_lock = asyncio.Lock()
+
 # Background task runner for processing files
 async def process_uploaded_file(file_path: Path, filename: str):
+    global _doc_list_cache
     try:
         logger.info(f"Background task: Processing document {filename}...")
         rag = await get_rag()
         await rag.process_document_complete(str(file_path), file_name=filename)
         logger.info(f"Background task: Finished processing {filename}")
+        
+        # Clear the LLM response cache so that future queries run fresh and aren't served stale fallback responses
+        try:
+            if hasattr(rag.lightrag, "llm_response_cache") and hasattr(rag.lightrag.llm_response_cache, "db"):
+                await rag.lightrag.llm_response_cache.db.execute("DELETE FROM lightrag_llm_cache")
+                logger.info("Successfully cleared PostgreSQL LLM query cache after document import")
+        except Exception as cache_err:
+            logger.warning(f"Could not clear LLM query cache: {cache_err}")
+            
     except Exception as e:
         logger.error(f"Background task: Error processing {filename}: {e}", exc_info=True)
+    finally:
+        # Invalidate document list cache so the next request pulls fresh status
+        _doc_list_cache = None
 
 
 # 1. API: Upload document (POST /api/upload)
 @app.post("/api/upload")
 async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    global _doc_list_cache
+    _doc_list_cache = None
     # Validate extension
     allowed_exts = {
         ".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".md", ".png", ".jpg", ".jpeg"
@@ -416,58 +475,73 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
 # 2. API: Document list & status (GET /api/documents)
 @app.get("/api/documents")
 async def list_documents():
-    try:
-        rag = await get_rag()
-        if not rag.lightrag or not rag.lightrag.doc_status:
-            return {"documents": []}
-            
-        if hasattr(rag.lightrag.doc_status, "initialize"):
-            await rag.lightrag.doc_status.initialize()
+    global _doc_list_cache, _doc_list_cache_time
+    
+    # Quick read cache check (valid for 3 seconds)
+    if _doc_list_cache is not None and (time.time() - _doc_list_cache_time) < 3.0:
+        return {"documents": _doc_list_cache}
+        
+    async with _doc_cache_lock:
+        # Double check inside lock to prevent redundant DB calls
+        if _doc_list_cache is not None and (time.time() - _doc_list_cache_time) < 3.0:
+            return {"documents": _doc_list_cache}
             
         try:
-            docs_data, _ = await rag.lightrag.doc_status.get_docs_paginated(page=1, page_size=1000)
-        finally:
-            if hasattr(rag.lightrag.doc_status, "finalize"):
-                await rag.lightrag.doc_status.finalize()
-        
-        doc_list = []
-        for doc_id, doc_status_info in docs_data:
-            if isinstance(doc_status_info, dict):
-                status_str = doc_status_info.get("status", "unknown")
-                file_path = doc_status_info.get("file_path", doc_id)
-                uploaded_at = doc_status_info.get("created_at", "")
-                error = doc_status_info.get("error_msg", "")
-            else:
-                status_str = getattr(doc_status_info, "status", "unknown")
-                file_path = getattr(doc_status_info, "file_path", doc_id)
-                uploaded_at = getattr(doc_status_info, "created_at", "")
-                error = getattr(doc_status_info, "error_msg", "")
-                if hasattr(status_str, "value"):
-                    status_str = status_str.value
-                    
-            status_map = {
-                "processing": "processing",
-                "handling": "processing",
-                "processed": "success",
-                "success": "success",
-                "failed": "failed"
-            }
-            mapped_status = status_map.get(str(status_str).lower(), "processing")
+            rag = await get_rag()
+            if not rag.lightrag or not rag.lightrag.doc_status:
+                return {"documents": []}
+                
+            if hasattr(rag.lightrag.doc_status, "initialize"):
+                await rag.lightrag.doc_status.initialize()
+                
+            try:
+                docs_data, _ = await rag.lightrag.doc_status.get_docs_paginated(page=1, page_size=1000)
+            finally:
+                if hasattr(rag.lightrag.doc_status, "finalize"):
+                    await rag.lightrag.doc_status.finalize()
             
-            doc_list.append({
-                "filename": os.path.basename(file_path),
-                "status": mapped_status,
-                "error": error if mapped_status == "failed" else None,
-                "uploaded_at": uploaded_at
-            })
+            doc_list = []
+            for doc_id, doc_status_info in docs_data:
+                if isinstance(doc_status_info, dict):
+                    status_str = doc_status_info.get("status", "unknown")
+                    file_path = doc_status_info.get("file_path", doc_id)
+                    uploaded_at = doc_status_info.get("created_at", "")
+                    error = doc_status_info.get("error_msg", "")
+                else:
+                    status_str = getattr(doc_status_info, "status", "unknown")
+                    file_path = getattr(doc_status_info, "file_path", doc_id)
+                    uploaded_at = getattr(doc_status_info, "created_at", "")
+                    error = getattr(doc_status_info, "error_msg", "")
+                    if hasattr(status_str, "value"):
+                        status_str = status_str.value
+                        
+                status_map = {
+                    "processing": "processing",
+                    "handling": "processing",
+                    "processed": "success",
+                    "success": "success",
+                    "failed": "failed"
+                }
+                mapped_status = status_map.get(str(status_str).lower(), "processing")
+                
+                doc_list.append({
+                    "filename": os.path.basename(file_path),
+                    "status": mapped_status,
+                    "error": error if mapped_status == "failed" else None,
+                    "uploaded_at": uploaded_at
+                })
+                
+            # Save results to memory cache
+            _doc_list_cache = doc_list
+            _doc_list_cache_time = time.time()
             
-        return {"documents": doc_list}
-    except Exception as e:
-        logger.error(f"Error fetching document list: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to query database statuses: {str(e)}"
-        )
+            return {"documents": doc_list}
+        except Exception as e:
+            logger.error(f"Error fetching document list: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to query database statuses: {str(e)}"
+            )
 
 
 # 3. API: Medical assistant query (POST /api/query)
