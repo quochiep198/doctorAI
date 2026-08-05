@@ -392,7 +392,14 @@ async def list_documents():
         if not rag.lightrag or not rag.lightrag.doc_status:
             return {"documents": []}
             
-        docs_data, _ = await rag.lightrag.doc_status.get_docs_paginated(page=1, page_size=1000)
+        if hasattr(rag.lightrag.doc_status, "initialize"):
+            await rag.lightrag.doc_status.initialize()
+            
+        try:
+            docs_data, _ = await rag.lightrag.doc_status.get_docs_paginated(page=1, page_size=1000)
+        finally:
+            if hasattr(rag.lightrag.doc_status, "finalize"):
+                await rag.lightrag.doc_status.finalize()
         
         doc_list = []
         for doc_id, doc_status_info in docs_data:
