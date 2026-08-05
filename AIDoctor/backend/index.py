@@ -79,6 +79,15 @@ def get_llm_funcs():
         if not vision_model or vision_model.startswith("gpt"):
             vision_model = "gemini-1.5-flash"
             
+    # Handle OpenRouter binding
+    elif llm_binding == "openrouter":
+        api_key = os.getenv("OPENROUTER_API_KEY", api_key)
+        base_url = "https://openrouter.ai/api/v1"
+        if not llm_model or llm_model.startswith("gpt"):
+            llm_model = "google/gemini-2.5-flash:free"
+        if not vision_model or vision_model.startswith("gpt"):
+            vision_model = "google/gemini-2.5-flash:free"
+            
     # Handle Ollama binding
     elif llm_binding == "ollama":
         base_url = os.getenv("OLLAMA_HOST", "http://localhost:11434") + "/v1"
@@ -146,7 +155,15 @@ def get_llm_funcs():
             return await llm_model_func(prompt, system_prompt, history_messages, **kwargs)
             
     # Setup Embedding call
-    embed_binding = os.getenv("EMBEDDING_BINDING", "openai").lower()
+    embed_binding = os.getenv("EMBEDDING_BINDING")
+    if not embed_binding:
+        if os.getenv("GEMINI_API_KEY"):
+            embed_binding = "gemini"
+        else:
+            embed_binding = "openai"
+    else:
+        embed_binding = embed_binding.lower()
+        
     embed_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
     embed_dim = int(os.getenv("EMBEDDING_DIM", "3072"))
     embed_base_url = os.getenv("EMBEDDING_BINDING_HOST", "https://api.openai.com/v1")
@@ -155,7 +172,7 @@ def get_llm_funcs():
     if embed_binding == "gemini":
         embed_api_key = os.getenv("GEMINI_API_KEY", embed_api_key)
         embed_base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
-        if not embed_model or embed_model.startswith("text-embedding-3"):
+        if not embed_model or embed_model.startswith("text-embedding-3") or embed_model == "text-embedding-3-large":
             embed_model = "text-embedding-004"
             embed_dim = 768
             
