@@ -1,14 +1,8 @@
 {
-  "builds": [
-    {
-      "src": "AIDoctor/backend/index.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
+  "rewrites": [
     {
       "src": "/api/(.*)",
-      "dest": "AIDoctor/backend/index.py"
+      "dest": "/api/index.py"
     },
     {
       "src": "/assets/(.*)",
