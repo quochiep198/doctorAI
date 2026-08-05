@@ -282,7 +282,8 @@ async def get_rag():
                 lightrag_kwargs["vector_storage"] = "PGVectorStorage"
                 lightrag_kwargs["doc_status_storage"] = "PGDocStatusStorage"
                 # Omit PGGraphStorage because Neon DB / standard cloud PG does not support the Apache AGE extension
-                # lightrag_kwargs["graph_storage"] = "PGGraphStorage"
+                # We explicitly force NetworkXStorage to override any environment variables (like LIGHTRAG_GRAPH_STORAGE)
+                lightrag_kwargs["graph_storage"] = "NetworkXStorage"
             
             _rag_instance = RAGAnything(
                 config=config,
