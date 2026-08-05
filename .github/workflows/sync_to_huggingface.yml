@@ -19,4 +19,9 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git push --force https://quochiepho:$HF_TOKEN@huggingface.co/spaces/quochiepho/doctorAI main
+          git config user.name "GitHub Actions"
+          git config user.email "github-actions@github.com"
+          git checkout -b temp-hf-deploy
+          git rm -rf assets/
+          git commit -m "chore: remove assets for Hugging Face deployment" --allow-empty
+          git push --force https://quochiepho:$HF_TOKEN@huggingface.co/spaces/quochiepho/doctorAI temp-hf-deploy:main
