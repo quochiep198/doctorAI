@@ -1,0 +1,26 @@
+{
+  "builds": [
+    {
+      "src": "AIDoctor/backend/index.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "AIDoctor/backend/index.py"
+    },
+    {
+      "src": "/assets/(.*)",
+      "dest": "/AIDoctor/static/assets/$1"
+    },
+    {
+      "src": "/favicon.ico",
+      "dest": "/AIDoctor/static/favicon.ico"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/AIDoctor/static/index.html"
+    }
+  ]
+}
