@@ -1,0 +1,22 @@
+# Ignore local virtual environments
+.venv/
+venv/
+env/
+
+# Ignore frontend development dependencies (React/Vite)
+**/node_modules/
+
+# Ignore local database and storage files
+rag_storage/
+uploads/
+.pytest_cache/
+.github/
+.git/
+.history/
+.vscode/
+.idea/
+
+# Ignore build artifacts that Vercel doesn't need to serve
+dist/
+build/
+*.log
