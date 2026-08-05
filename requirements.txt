@@ -10,3 +10,4 @@ openai
 asyncpg
 pgvector
 python-multipart
+pypdf

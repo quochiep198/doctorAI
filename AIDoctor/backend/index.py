@@ -204,6 +204,52 @@ def get_llm_funcs():
     
     return llm_model_func, vision_model_func, embedding_func
 
+# Register a custom lightweight SimpleParser for environments without heavy PDF parsers
+from raganything.parser import Parser, register_parser
+
+class SimpleParser(Parser):
+    def check_installation(self) -> bool:
+        return True
+
+    def parse_pdf(self, pdf_path: Path, output_dir=None, **kwargs) -> list:
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(str(pdf_path))
+            content_list = []
+            for page_idx, page in enumerate(reader.pages):
+                text = page.extract_text()
+                if text:
+                    content_list.append({
+                        "type": "text",
+                        "text": text,
+                        "page_idx": page_idx
+                    })
+            return content_list
+        except Exception as e:
+            logger.error(f"SimpleParser: Error parsing PDF: {e}")
+            raise
+
+    def parse_document(self, file_path: Any, **kwargs) -> list:
+        file_path = Path(file_path)
+        ext = file_path.suffix.lower()
+        if ext == ".pdf":
+            return self.parse_pdf(file_path, **kwargs)
+        elif ext in self.TEXT_FORMATS:
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    return [{"type": "text", "text": f.read(), "page_idx": 0}]
+            except Exception as e:
+                logger.error(f"SimpleParser: Error reading text file: {e}")
+                raise
+        else:
+            return [{"type": "text", "text": f"Format {ext} parsing not implemented in SimpleParser", "page_idx": 0}]
+
+try:
+    register_parser("simple", SimpleParser)
+    logger.info("Successfully registered custom SimpleParser")
+except Exception as e:
+    logger.error(f"Failed to register custom SimpleParser: {e}")
+
 # Lazy loaded singleton RAGAnything instance
 _rag_instance = None
 _rag_lock = asyncio.Lock()
@@ -218,7 +264,7 @@ async def get_rag():
             # Setup configuration
             config = RAGAnythingConfig(
                 working_dir=WORKING_DIR,
-                parser=os.getenv("PARSER", "mineru"),
+                parser=os.getenv("PARSER", "simple"),
                 parse_method=os.getenv("PARSE_METHOD", "auto"),
                 enable_image_processing=os.getenv("ENABLE_IMAGE_PROCESSING", "true").lower() == "true",
                 enable_table_processing=os.getenv("ENABLE_TABLE_PROCESSING", "true").lower() == "true",
