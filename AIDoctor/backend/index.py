@@ -277,11 +277,12 @@ async def get_rag():
             # Check for PostgreSQL storage
             lightrag_kwargs = {}
             if os.getenv("POSTGRES_HOST"):
-                logger.info("Initializing LightRAG with PGDocStatusStorage and other PostgreSQL adapters")
+                logger.info("Initializing LightRAG with PGDocStatusStorage and other PostgreSQL adapters (using default file/memory graph storage)")
                 lightrag_kwargs["kv_storage"] = "PGKVStorage"
                 lightrag_kwargs["vector_storage"] = "PGVectorStorage"
                 lightrag_kwargs["doc_status_storage"] = "PGDocStatusStorage"
-                lightrag_kwargs["graph_storage"] = "PGGraphStorage"
+                # Omit PGGraphStorage because Neon DB / standard cloud PG does not support the Apache AGE extension
+                # lightrag_kwargs["graph_storage"] = "PGGraphStorage"
             
             _rag_instance = RAGAnything(
                 config=config,
