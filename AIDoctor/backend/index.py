@@ -41,11 +41,11 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Helper: Parse Neon DB/PostgreSQL connection string
 def parse_database_url():
-    db_url = os.getenv("DATABASE_URL")
+    db_url = os.getenv("DATABASE_URL") or os.getenv("STORAGE_URL") or os.getenv("POSTGRES_URL")
     if not db_url:
         return
     
-    logger.info("Parsing DATABASE_URL for PostgreSQL configuration")
+    logger.info("Parsing database URL for PostgreSQL configuration")
     try:
         parsed = urllib.parse.urlparse(db_url)
         os.environ["POSTGRES_HOST"] = parsed.hostname or "localhost"
@@ -59,7 +59,7 @@ def parse_database_url():
         os.environ["POSTGRES_DB"] = parsed.path.lstrip("/") or ""
         logger.info(f"PostgreSQL configured: host={os.environ['POSTGRES_HOST']}, db={os.environ['POSTGRES_DATABASE']}")
     except Exception as e:
-        logger.error(f"Failed to parse DATABASE_URL: {e}")
+        logger.error(f"Failed to parse database URL: {e}")
 
 # Helper: Configure LLM & Embeddings based on env variables
 def get_llm_funcs():
