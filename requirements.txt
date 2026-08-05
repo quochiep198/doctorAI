@@ -9,3 +9,4 @@ psycopg2-binary
 openai
 asyncpg
 pgvector
+python-multipart
