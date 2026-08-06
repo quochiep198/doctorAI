@@ -525,6 +525,7 @@ async def list_documents():
                 mapped_status = status_map.get(str(status_str).lower(), "processing")
                 
                 doc_list.append({
+                    "id": doc_id,
                     "filename": os.path.basename(file_path),
                     "status": mapped_status,
                     "error": error if mapped_status == "failed" else None,
@@ -542,6 +543,73 @@ async def list_documents():
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to query database statuses: {str(e)}"
             )
+
+
+# 2.5 API: Delete document (DELETE /api/documents/{doc_id})
+@app.delete("/api/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    global _doc_list_cache
+    try:
+        rag = await get_rag()
+        
+        # Try to find file_path from doc status first to delete physical file
+        file_path = None
+        if rag.lightrag and rag.lightrag.doc_status:
+            try:
+                if hasattr(rag.lightrag.doc_status, "initialize"):
+                    await rag.lightrag.doc_status.initialize()
+                
+                doc_status_info = await rag.lightrag.doc_status.get_by_id(doc_id)
+                if doc_status_info:
+                    if isinstance(doc_status_info, dict):
+                        file_path = doc_status_info.get("file_path")
+                    else:
+                        file_path = getattr(doc_status_info, "file_path", None)
+            except Exception as e:
+                logger.error(f"Error querying doc status for deletion path of {doc_id}: {e}")
+            finally:
+                if hasattr(rag.lightrag.doc_status, "finalize"):
+                    await rag.lightrag.doc_status.finalize()
+        
+        logger.info(f"Deleting document ID: {doc_id}")
+        # Delete from LightRAG index
+        result = await rag.lightrag.adelete_by_doc_id(doc_id)
+        
+        # Check if LightRAG deletion failed
+        status_val = getattr(result, "status", "fail")
+        if status_val == "fail":
+            msg = getattr(result, "message", "Unknown deletion error")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"LightRAG deletion failed: {msg}"
+            )
+        
+        # Delete the physical file if it exists
+        if file_path:
+            try:
+                p = Path(file_path)
+                if p.exists():
+                    p.unlink()
+                    logger.info(f"Deleted physical file: {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete physical file {file_path}: {e}")
+        
+        # Invalidate doc status cache
+        _doc_list_cache = None
+        
+        return {
+            "success": True,
+            "message": f"Document {doc_id} deleted successfully."
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Error deleting document: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred while deleting document: {str(e)}"
+        )
+
 
 
 # 3. API: Medical assistant query (POST /api/query)

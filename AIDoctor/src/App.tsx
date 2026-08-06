@@ -5,6 +5,7 @@ import katex from 'katex';
 
 // Types
 interface DocumentItem {
+  id?: string;
   filename: string;
   status: 'processing' | 'success' | 'failed';
   error: string | null;
@@ -47,6 +48,8 @@ export default function App() {
   const [inputValue, setInputValue] = useState('');
   const [queryMode, setQueryMode] = useState('hybrid');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isInitialLoadingDocs, setIsInitialLoadingDocs] = useState(true);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [activeCitations, setActiveCitations] = useState<Record<string, Citation>>({});
   const [popover, setPopover] = useState<PopoverState>({
@@ -62,10 +65,13 @@ export default function App() {
   const chatMessagesRef = useRef<HTMLDivElement>(null);
 
   // Fetch document list
-  const fetchDocuments = async () => {
+  const fetchDocuments = async (isInitial = false) => {
     try {
       const res = await fetch('/api/documents');
-      if (!res.ok) return;
+      if (!res.ok) {
+        if (isInitial) setIsInitialLoadingDocs(false);
+        return;
+      }
       const data = await res.json();
       if (data.documents) {
         setDocuments(data.documents);
@@ -77,13 +83,15 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error fetching documents:', err);
+    } finally {
+      if (isInitial) setIsInitialLoadingDocs(false);
     }
   };
 
   // Initial load and polling
   useEffect(() => {
-    fetchDocuments();
-    const interval = setInterval(fetchDocuments, 4000);
+    fetchDocuments(true);
+    const interval = setInterval(() => fetchDocuments(false), 4000);
     return () => clearInterval(interval);
   }, []);
 
@@ -188,6 +196,39 @@ export default function App() {
           return d;
         }));
       }
+    }
+  };
+
+  // Delete Document Handler
+  const handleDeleteDocument = async (doc: DocumentItem) => {
+    if (!doc.id) return;
+
+    if (!window.confirm(`Bạn có chắc chắn muốn xóa tài liệu "${doc.filename}" khỏi cơ sở dữ liệu y khoa của phòng khám không?`)) {
+      return;
+    }
+
+    setIsDeleting(true);
+
+    try {
+      const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Xóa thất bại');
+      }
+
+      // Optimistically remove the document from local state
+      setDocuments(prev => prev.filter(d => d.id !== doc.id));
+      
+      // Refresh documents
+      await fetchDocuments(false);
+    } catch (err: any) {
+      console.error(`Error deleting document ${doc.filename}:`, err);
+      alert(`Lỗi khi xóa tài liệu: ${err.message}`);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -392,7 +433,12 @@ export default function App() {
           <div className="document-list-container">
             <h3>TÀI LIỆU PHÒNG KHÁM ĐÃ TẢI LÊN</h3>
             <div className="document-list">
-              {allDocuments.length === 0 ? (
+              {isInitialLoadingDocs ? (
+                <div className="loading-docs-state">
+                  <i className="fa-solid fa-spinner spinner-icon"></i>
+                  <p>Đang tải tài liệu phòng khám...</p>
+                </div>
+              ) : allDocuments.length === 0 ? (
                 <div className="empty-docs-state">
                   <i className="fa-solid fa-file-medical"></i>
                   <p>Chưa có tài liệu nào được tải lên</p>
@@ -404,21 +450,35 @@ export default function App() {
                       <i className={`fa-solid ${getDocIcon(doc.filename)} doc-icon`}></i>
                       <span className="doc-name" title={doc.filename}>{doc.filename}</span>
                     </div>
-                    {doc.status === 'success' && (
-                      <span className="status-indicator success">
-                        <i className="fa-solid fa-circle-check"></i> Thành công
-                      </span>
-                    )}
-                    {doc.status === 'failed' && (
-                      <span className="status-indicator failed" title={doc.error || 'Lập chỉ mục thất bại'}>
-                        <i className="fa-solid fa-circle-exclamation"></i> Lỗi
-                      </span>
-                    )}
-                    {doc.status === 'processing' && (
-                      <span className="status-indicator processing">
-                        <i className="fa-solid fa-spinner spinner-icon"></i> Đang index
-                      </span>
-                    )}
+                    <div className="doc-actions">
+                      {doc.status === 'success' && (
+                        <span className="status-indicator success">
+                          <i className="fa-solid fa-circle-check"></i> Thành công
+                        </span>
+                      )}
+                      {doc.status === 'failed' && (
+                        <span className="status-indicator failed" title={doc.error || 'Lập chỉ mục thất bại'}>
+                          <i className="fa-solid fa-circle-exclamation"></i> Lỗi
+                        </span>
+                      )}
+                      {doc.status === 'processing' && (
+                        <span className="status-indicator processing">
+                          <i className="fa-solid fa-spinner spinner-icon"></i> Đang index
+                        </span>
+                      )}
+                      {doc.id && (
+                        <button
+                          className="delete-doc-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteDocument(doc);
+                          }}
+                          title="Xóa tài liệu"
+                        >
+                          <i className="fa-solid fa-trash-can"></i>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))
               )}
@@ -558,6 +618,16 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isDeleting && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="loading-modal-content">
+            <i className="fa-solid fa-spinner spinner-icon loading-modal-spinner"></i>
+            <h3>Đang xóa tài liệu y khoa...</h3>
+            <p>Hệ thống đang loại bỏ dữ liệu chỉ mục và đồng bộ lại đồ thị tri thức.</p>
           </div>
         </div>
       )}
